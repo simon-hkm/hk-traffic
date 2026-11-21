@@ -1,4 +1,4 @@
-import { isLineCode } from "@/lib/network"
+import { stationCodesOnLine } from "@/lib/network"
 import type { LineBoard, LineCode } from "@/lib/types"
 
 function failure(line: LineCode, message: string): LineBoard {
@@ -36,39 +36,43 @@ export async function loadStationBoard(stationCode: string, lines: LineCode[]): 
   }
 }
 
-export async function loadNetworkSchedules(): Promise<Partial<Record<LineCode, Record<string, LineBoard>>> | null> {
-  try {
-    const response = await fetch("/api/mtr/network")
-    if (!response.ok) return null
-    const payload = (await response.json()) as { lines?: unknown }
-    if (!payload.lines || typeof payload.lines !== "object") return null
-    const lines: Partial<Record<LineCode, Record<string, LineBoard>>> = {}
-    for (const [code, stations] of Object.entries(payload.lines)) {
-      if (!isLineCode(code) || !stations || typeof stations !== "object") continue
-      const boards: Record<string, LineBoard> = {}
-      for (const [station, board] of Object.entries(stations)) {
-        if (isBoard(board)) boards[station] = board
-      }
-      lines[code] = boards
+async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const index = next
+      next += 1
+      const item = items[index]
+      if (item !== undefined) results[index] = await fn(item)
     }
-    return lines
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  return results
+}
+
+async function fetchCachedBoards(stationCode: string): Promise<LineBoard[]> {
+  try {
+    const response = await fetch(`/api/mtr/station/${encodeURIComponent(stationCode)}`)
+    if (!response.ok) return []
+    const payload = (await response.json()) as { boards?: unknown }
+    return Array.isArray(payload.boards) ? payload.boards.filter(isBoard) : []
   } catch {
-    return null
+    return []
   }
 }
 
 export async function loadLineSchedules(line: LineCode): Promise<Record<string, LineBoard> | null> {
-  try {
-    const response = await fetch(`/api/mtr/line/${encodeURIComponent(line)}`)
-    if (!response.ok) return null
-    const payload = (await response.json()) as { stations?: unknown }
-    if (!payload.stations || typeof payload.stations !== "object") return null
-    const stations: Record<string, LineBoard> = {}
-    for (const [code, board] of Object.entries(payload.stations)) {
-      if (isBoard(board)) stations[code] = board
-    }
-    return stations
-  } catch {
-    return null
-  }
+  const codes = stationCodesOnLine(line)
+  const lists = await pool(codes, 6, fetchCachedBoards)
+  const stations: Record<string, LineBoard> = {}
+  codes.forEach((code, index) => {
+    const board = lists[index]?.find((item) => item.line === line)
+    if (board) stations[code] = board
+  })
+  return Object.keys(stations).length > 0 ? stations : null
+}
+
+export async function loadCachedBoards(codes: string[]): Promise<LineBoard[][]> {
+  return pool(codes, 6, fetchCachedBoards)
 }

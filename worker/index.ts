@@ -17,10 +17,6 @@ const PAUSE_TTL = 45
 const SNAPSHOT_TTL = 90
 const MAX_UPSTREAM = 4
 
-const inflight = new Map<string, Promise<Response>>()
-let active = 0
-const queue: Array<() => void> = []
-
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
@@ -40,10 +36,15 @@ export default {
 }
 
 async function networkRoute(request: Request): Promise<Response> {
+  // One Worker invocation can make only 50 upstream requests. The full
+  // network is 121 stations, so each line is fetched as its own request.
   return remember(request, SCHEDULE_TTL, async () => {
+    const origin = new URL(request.url).origin
     const entries = await mapPool(lines.lines, MAX_UPSTREAM, async (line) => {
-      const stations = await boardsForLine(line.code)
-      return [line.code, stations] as const
+      const response = await fetch(`${origin}/api/mtr/line/${line.code}`)
+      if (!response.ok) return [line.code, {}] as const
+      const body = (await response.json()) as { stations?: Record<string, LineBoard> }
+      return [line.code, body.stations ?? {}] as const
     })
     return json({ lines: Object.fromEntries(entries) }, 200, "MISS")
   })
@@ -85,15 +86,11 @@ async function oneBoard(line: LineCode, station: string): Promise<LineBoard> {
   const url = `${MTR}?line=${encodeURIComponent(line)}&sta=${encodeURIComponent(station)}&lang=TC`
   let response: Response
   try {
-    const upstream = await withSlot(async () => {
-      if (await paused()) return null
-      return fetch(url, {
-        signal: AbortSignal.timeout(8_000),
-        headers: { Accept: "application/json", "User-Agent": "hk-traffic-map" },
-      })
+    if (await paused()) return boardFailure(line, "查詢過於頻繁，請稍後再試。")
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(8_000),
+      headers: { Accept: "application/json", "User-Agent": "hk-traffic-map" },
     })
-    if (!upstream) return boardFailure(line, "查詢過於頻繁，請稍後再試。")
-    response = upstream
   } catch {
     return boardFailure(line, "暫時無法取得這條綫的到站資料，請稍後再試。")
   }
@@ -139,25 +136,15 @@ async function remember(request: Request, ttl: number, load: () => Promise<Respo
   const hit = await cache.match(key)
   if (hit) return stamp(hit, "HIT")
 
-  const pending = inflight.get(key.url)
-  if (pending) return stamp(await pending, "HIT")
-
-  const promise = load().then(async (response) => {
-    const stored = stamp(response, "MISS")
-    const control = stored.headers.get("Cache-Control") ?? `public, max-age=${ttl}`
-    const cacheable = new Response(stored.clone().body, {
-      status: stored.status,
-      headers: replaceHeader(stored.headers, "Cache-Control", control),
-    })
-    if (stored.ok || stored.status === 404 || stored.status === 502) await cache.put(key, cacheable.clone())
-    return cacheable
+  const response = await load()
+  const stored = stamp(response, "MISS")
+  const control = stored.headers.get("Cache-Control") ?? `public, max-age=${ttl}`
+  const cacheable = new Response(stored.clone().body, {
+    status: stored.status,
+    headers: replaceHeader(stored.headers, "Cache-Control", control),
   })
-  inflight.set(key.url, promise)
-  try {
-    return await promise
-  } finally {
-    inflight.delete(key.url)
-  }
+  if (stored.ok || stored.status === 404 || stored.status === 502) await cache.put(key, cacheable.clone())
+  return cacheable
 }
 
 function stamp(response: Response, cache: "HIT" | "MISS"): Response {
@@ -207,23 +194,6 @@ async function markPaused(): Promise<void> {
     new Request(PAUSE_KEY),
     new Response("paused", { headers: { "Cache-Control": `public, max-age=${PAUSE_TTL}` } }),
   )
-}
-
-function withSlot<T>(task: () => Promise<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const start = () => {
-      active += 1
-      task()
-        .then(resolve, reject)
-        .finally(() => {
-          active -= 1
-          const next = queue.shift()
-          if (next) next()
-        })
-    }
-    if (active < MAX_UPSTREAM) start()
-    else queue.push(start)
-  })
 }
 
 async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {

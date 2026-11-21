@@ -1,4 +1,5 @@
-import { loadLineSchedules, loadNetworkSchedules } from "@/lib/mtr"
+import { loadCachedBoards, loadLineSchedules } from "@/lib/mtr"
+import { isLineCode } from "@/lib/network"
 import { network } from "@/lib/network"
 import { hongKongInstant } from "@/lib/train-time"
 import type { LineBoard, LineCode, MovingTrain } from "@/lib/types"
@@ -39,11 +40,21 @@ export async function loadMovingTrains(line: LineCode): Promise<MotionResult> {
 }
 
 export async function loadNetworkTrains(): Promise<MotionResult> {
-  const lines = await loadNetworkSchedules()
-  if (!lines) return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
-  const groups = Object.entries(lines).flatMap(([line, stations]) =>
-    stations ? [{ line: line as LineCode, stations }] : [],
-  )
+  // Ask for one station at a time. A Worker can only make a small number of
+  // upstream requests, and the full network does not fit in one request.
+  const codes = network.stations.map((station) => station.code)
+  const lists = await loadCachedBoards(codes)
+  const grouped = new Map<LineCode, Record<string, LineBoard>>()
+  codes.forEach((code, index) => {
+    for (const board of lists[index] ?? []) {
+      if (!isLineCode(board.line)) continue
+      const stations = grouped.get(board.line) ?? {}
+      stations[code] = board
+      grouped.set(board.line, stations)
+    }
+  })
+  const groups = [...grouped].map(([line, stations]) => ({ line, stations }))
+  if (groups.length === 0) return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
   return resultFromSchedules(groups)
 }
 
