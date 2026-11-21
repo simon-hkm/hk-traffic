@@ -1,10 +1,11 @@
-// Static asset deploy only. The live app needs the Next.js server so the
-// MTR and snapshot caches exist. Do not use this file for the current app.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "hk-traffic-map",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-11-21",
   "assets": {
-    "directory": "./out"
+    "directory": "./out",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
   }
 }

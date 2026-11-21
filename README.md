@@ -50,6 +50,17 @@ npm run build
 npm start
 ```
 
-到站和快拍由這個 Node 伺服器暫存，所以不能再把網站做成純靜態檔。`wrangler.jsonc` 裡的靜態發佈不含這兩個接口。
+到站和快拍在本機由 Next.js 伺服器暫存。發佈到 Cloudflare 時，頁面是靜態檔，`/api` 由 Worker 用 Cache API 暫存，規則相同：同一站 15 秒、同一快拍 90 秒。
 
 底圖圖磚仍由瀏覽器向 OpenFreeMap 讀取。圖磚有瀏覽器快取，不經本站轉送，避免把所有人的地圖流量集中到一個位址。
+
+## 發佈到 Cloudflare Workers
+
+Workers 免費方案每日約 10 萬次 Worker 請求。頁面和靜態檔不經 Worker，不計入這額度。選定路綫後，瀏覽器約每 20 秒問一次 `/api`，這會計入額度。
+
+```bash
+npx wrangler login
+npm run deploy:cloudflare
+```
+
+完成後網址是 `https://hk-traffic-map.<你的帳戶>.workers.dev`。

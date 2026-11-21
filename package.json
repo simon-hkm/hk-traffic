@@ -8,6 +8,8 @@
     "start": "next start -p 4187 -H 0.0.0.0",
     "lint": "eslint",
     "data": "python3 scripts/build_data.py",
+    "export:cloudflare": "node scripts/export-static.mjs",
+    "deploy:cloudflare": "node scripts/export-static.mjs && wrangler deploy",
     "postinstall": "node scripts/copy-maplibre-worker.mjs"
   },
   "dependencies": {
