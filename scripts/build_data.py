@@ -67,6 +67,8 @@ def load_lines() -> list[dict[str, str]]:
 
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "wikidata-stations.json"
+ROUTE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mtr-route-ways.json"
+LINE_CODES = {item["code"] for item in LINES}
 
 
 def load_wikidata() -> list[dict[str, object]]:
@@ -181,13 +183,22 @@ def build_network(rows: list[dict[str, str]], points: list[dict[str, object]]) -
     stations.sort(key=lambda item: str(item["name"]))
 
     coords = {item["code"]: item for item in stations}
+    route_ways = load_route_ways()
+    segments = curved_segments(route_ways)
+    covered = {segment["line"] for segment in segments}
+    segments.extend(straight_segments(rows, coords, LINE_CODES - covered))
+    return {"lines": LINES, "stations": stations, "segments": segments}
+
+
+def straight_segments(rows: list[dict[str, str]], coords: dict[str, dict[str, object]], lines: set[str]) -> list[dict[str, object]]:
     pair_seen: set[tuple[str, str, str]] = set()
-    segments = []
+    segments: list[dict[str, object]] = []
     grouped: dict[tuple[str, str], list[tuple[float, str]]] = defaultdict(list)
     for row in rows:
-        grouped[(row["Line Code"].strip(), row["Direction"].strip())].append(
-            (float(row["Sequence"]), row["Station Code"].strip())
-        )
+        line = row["Line Code"].strip()
+        if line not in lines:
+            continue
+        grouped[(line, row["Direction"].strip())].append((float(row["Sequence"]), row["Station Code"].strip()))
     for (line, _direction), entries in grouped.items():
         ordered = [code for _seq, code in sorted(entries)]
         for start, end in zip(ordered, ordered[1:]):
@@ -206,22 +217,123 @@ def build_network(rows: list[dict[str, str]], points: list[dict[str, object]]) -
                     ],
                 }
             )
+    if "EAL" in lines:
+        for start, end in (("SHT", "RAC"), ("RAC", "UNI")):
+            segments.append(
+                {
+                    "line": "EAL",
+                    "from": start,
+                    "to": end,
+                    "path": [
+                        [coords[start]["lng"], coords[start]["lat"]],
+                        [coords[end]["lng"], coords[end]["lat"]],
+                    ],
+                }
+            )
+    return segments
 
-    # Race-day trains run Sha Tin–Racecourse–University and skip Fo Tan.
-    for start, end in (("SHT", "RAC"), ("RAC", "UNI")):
-        segments.append(
-            {
-                "line": "EAL",
-                "from": start,
-                "to": end,
-                "path": [
-                    [coords[start]["lng"], coords[start]["lat"]],
-                    [coords[end]["lng"], coords[end]["lat"]],
-                ],
-            }
+
+def perpendicular_distance_m(point: list[float], start: list[float], end: list[float]) -> float:
+    def to_xy(coord: list[float], origin: list[float]) -> tuple[float, float]:
+        lat = math.radians(origin[1])
+        x = math.radians(coord[0] - origin[0]) * math.cos(lat) * 6_371_000
+        y = math.radians(coord[1] - origin[1]) * 6_371_000
+        return x, y
+
+    end_x, end_y = to_xy(end, start)
+    point_x, point_y = to_xy(point, start)
+    length_sq = end_x * end_x + end_y * end_y
+    if length_sq == 0:
+        return math.hypot(point_x, point_y)
+    ratio = max(0.0, min(1.0, (point_x * end_x + point_y * end_y) / length_sq))
+    return math.hypot(point_x - ratio * end_x, point_y - ratio * end_y)
+
+
+def simplify_path(points: list[list[float]], tolerance_m: float) -> list[list[float]]:
+    if len(points) < 3:
+        return points
+    start, end = points[0], points[-1]
+    index = 0
+    farthest = 0.0
+    for position in range(1, len(points) - 1):
+        distance = perpendicular_distance_m(points[position], start, end)
+        if distance > farthest:
+            index = position
+            farthest = distance
+    if farthest <= tolerance_m:
+        return [start, end]
+    left = simplify_path(points[: index + 1], tolerance_m)
+    right = simplify_path(points[index:], tolerance_m)
+    return left[:-1] + right
+
+
+def load_route_ways() -> dict[str, dict[str, list[list[float]]]]:
+    query = """
+    [out:json][timeout:180];
+    relation["network"="港鐵 MTR"]["route"="subway"]["ref"~"^(AEL|TCL|TML|TKL|EAL|SIL|TWL|ISL|KTL|DRL)$"](22.13,113.82,22.58,114.45);
+    out geom;
+    """
+    url = "https://overpass-api.de/api/interpreter"
+    try:
+        request = urllib.request.Request(
+            url,
+            data=query.encode(),
+            headers={"User-Agent": UA, "Content-Type": "application/x-www-form-urlencoded"},
         )
+        with urllib.request.urlopen(request, timeout=180) as response:
+            payload = json.loads(response.read())
+        ways = ways_from_overpass(payload)
+        ROUTE_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        ROUTE_FIXTURE.write_text(json.dumps(ways, separators=(",", ":")), encoding="utf-8")
+        return ways
+    except urllib.error.HTTPError as error:
+        if not ROUTE_FIXTURE.exists():
+            raise
+        print(f"Overpass HTTP {error.code}; using saved route fixture")
+        return json.loads(ROUTE_FIXTURE.read_text(encoding="utf-8"))
+    except urllib.error.URLError:
+        if not ROUTE_FIXTURE.exists():
+            raise
+        print("Overpass unavailable; using saved route fixture")
+        return json.loads(ROUTE_FIXTURE.read_text(encoding="utf-8"))
 
-    return {"lines": LINES, "stations": stations, "segments": segments}
+
+def ways_from_overpass(payload: dict[str, object]) -> dict[str, dict[str, list[list[float]]]]:
+    ways: dict[str, dict[str, list[list[float]]]] = {}
+    elements = payload.get("elements", [])
+    assert isinstance(elements, list)
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        tags = element.get("tags", {})
+        if not isinstance(tags, dict):
+            continue
+        line = str(tags.get("ref", ""))
+        if line not in LINE_CODES:
+            continue
+        members = element.get("members", [])
+        if not isinstance(members, list):
+            continue
+        for member in members:
+            if not isinstance(member, dict) or member.get("type") != "way":
+                continue
+            geometry = member.get("geometry") or []
+            if not isinstance(geometry, list) or len(geometry) < 2:
+                continue
+            coords = [[round(float(point["lon"]), 5), round(float(point["lat"]), 5)] for point in geometry]
+            ways.setdefault(line, {})[str(member["ref"])] = coords
+    return ways
+
+
+def curved_segments(route_ways: dict[str, dict[str, list[list[float]]]]) -> list[dict[str, object]]:
+    segments: list[dict[str, object]] = []
+    for line, ways in route_ways.items():
+        for way_id, coords in ways.items():
+            path = simplify_path(coords, 8)
+            if len(path) < 2:
+                continue
+            segments.append({"line": line, "from": way_id, "to": way_id, "path": path})
+    return segments
 
 
 def build_cameras() -> list[dict[str, object]]:

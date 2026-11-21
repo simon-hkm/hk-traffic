@@ -28,7 +28,7 @@ function SourceNote() {
   return (
     <p className="text-xs leading-5 text-muted-foreground">
       到站班次來自港鐵，約每十秒更新。快拍照片來自運輸署，約每兩分鐘更新。底圖為 OpenFreeMap，地圖資料來自 OpenStreetMap。
-      車站位置是用公開地圖座標對上官方站名；九龍、大埔墟和馬場已另行核對。路綫按官方車站次序以直線連接。
+      車站位置是用公開地圖座標對上官方站名；九龍、大埔墟和馬場已另行核對。路綫沿 OpenStreetMap 的港鐵路軌彎曲。
     </p>
   )
 }
