@@ -24,3 +24,7 @@ export function cameraByKey(key: string): Camera | undefined {
 export function stationName(code: string): string {
   return stations.get(code)?.name ?? code
 }
+
+export function stationCodesOnLine(line: LineCode): string[] {
+  return network.stations.filter((station) => station.lines.includes(line)).map((station) => station.code)
+}

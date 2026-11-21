@@ -1,6 +1,6 @@
 const HONG_KONG_OFFSET = "+08:00"
 
-function hongKongInstant(value: unknown): number | null {
+export function hongKongInstant(value: unknown): number | null {
   if (typeof value !== "string") return null
   const match = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/)
   if (!match) return null

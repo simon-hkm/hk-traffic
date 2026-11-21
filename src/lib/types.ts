@@ -37,6 +37,7 @@ export type Network = {
   lines: LineInfo[]
   stations: Station[]
   segments: Segment[]
+  legs: Segment[]
 }
 
 export type Camera = {
@@ -55,9 +56,11 @@ export type Selection =
 
 export type TrainRow = {
   seq: number
+  destCode: string
   destination: string
   platform: string
   clock: string
+  time: string
   minutesLabel: string
   unconfirmed: boolean
 }
@@ -69,8 +72,19 @@ export type LineBoard = {
   alertDetail: string | null
   alertUrl: string | null
   updatedAt: string | null
+  reference: string | null
   directions: { trains: TrainRow[] }[]
   error: string | null
+}
+
+export type MovingTrain = {
+  id: string
+  line: LineCode
+  destination: string
+  path: [number, number][]
+  fraction: number
+  etaMs: number
+  capturedAt: number
 }
 
 export type SnapshotView = {

@@ -43,9 +43,11 @@ function readTrains(value: unknown, reference: unknown): TrainRow[] {
       const seq = Number(train.seq)
       return {
         seq: Number.isFinite(seq) ? seq : 0,
+        destCode: destinationCode,
         destination: destinationCode ? stationName(destinationCode) : "未注明目的地",
         platform: train.plat === undefined || train.plat === "" ? "" : String(train.plat),
         clock: clockOf(train.time),
+        time: typeof train.time === "string" ? train.time : "",
         minutesLabel: minutesUntil(reference, train.time),
         unconfirmed: String(train.valid ?? "Y") !== "Y",
       }
@@ -62,6 +64,7 @@ function failure(line: LineCode, message: string): LineBoard {
     alertDetail: null,
     alertUrl: null,
     updatedAt: null,
+    reference: null,
     directions: [],
     error: message,
   }
@@ -104,6 +107,7 @@ export async function loadLine(line: LineCode, stationCode: string): Promise<Lin
     alertDetail: alert && message ? message : null,
     alertUrl: typeof payload.url === "string" ? payload.url : null,
     updatedAt: updatedAt || null,
+    reference: typeof reference === "string" ? reference : null,
     directions: [
       { trains: readTrains(block?.UP, reference) },
       { trains: readTrains(block?.DOWN, reference) },

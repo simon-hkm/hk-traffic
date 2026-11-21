@@ -29,6 +29,7 @@ function SourceNote() {
     <p className="text-xs leading-5 text-muted-foreground">
       到站班次來自港鐵，約每十秒更新。快拍照片來自運輸署，約每兩分鐘更新。底圖為 OpenFreeMap，地圖資料來自 OpenStreetMap。
       車站位置是用公開地圖座標對上官方站名；九龍、大埔墟和馬場已另行核對。路綫沿 OpenStreetMap 的港鐵路軌彎曲。
+      選定一條路綫後，列車會沿路軌移動，位置由到站時間推算，不是港鐵定位。
     </p>
   )
 }
@@ -245,7 +246,7 @@ export function DetailPanel({
             <div className="space-y-3">
               <h2 className="text-xl font-semibold tracking-tight">先點地圖上的點</h2>
               <p className="text-sm leading-6">
-                點一個車站，查看即將到站的班次。點一個橙色快拍點，查看該路段的最新照片。沒有班次或照片時，這裡會直接說明。
+                點一個車站，查看即將到站的班次。在上方選定一條路綫，列車會沿路軌移動。點一個橙色快拍點，查看該路段的最新照片。沒有班次或照片時，這裡會直接說明。
               </p>
               <p className="text-sm leading-6 text-muted-foreground">
                 現有 {network.stations.length} 個重鐵站、{cameras.length} 個快拍點。快拍點很多，縮小地圖時會叠在一起，可以用搜尋或關掉其中一層。

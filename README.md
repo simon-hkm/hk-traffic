@@ -14,11 +14,13 @@
 | --- | --- |
 | 底圖 | OpenFreeMap Liberty 樣式，經 MapLibre 顯示。免註冊、免鑰匙。 |
 | 路綫和站名 | [港鐵路綫及車站](https://opendata.mtr.com.hk/data/mtr_lines_and_stations.csv) |
-| 到站班次 | [港鐵實時列車服務資訊](https://data.gov.hk/tc-data/dataset/mtr-data2-nexttrain-data)，只在點選時向 `rt.data.gov.hk` 查詢 |
+| 到站班次 | [港鐵實時列車服務資訊](https://data.gov.hk/tc-data/dataset/mtr-data2-nexttrain-data)。點選車站時查該站；選定一條路綫時，約每 20 秒查該綫各站，用來估算列車位置。 |
 | 快拍位置 | [運輸署交通情況快拍圖像](https://data.gov.hk/tc-data/dataset/hk-td-tis_2-traffic-snapshot-images) |
 | 快拍照片 | 瀏覽器直接向 `tdcctv.data.one.gov.hk` 讀取 |
 
 官方路綫檔沒有車站座標，也沒有馬場站。座標來自 Wikidata，九龍站、大埔墟站和馬場站已另行核對。路綫形狀來自 OpenStreetMap 的港鐵路軌，沿真實走線彎曲。
+
+港鐵沒有提供列車定位。選定一條路綫後，地圖用各站到站時間，把即將到站的列車放在前一站到該站的路軌上，並按剩餘時間移動。這是估算，畫面上會說明。
 
 到站接口即使指定繁體中文，目的地仍是車站代碼。中文站名由路綫檔對照。
 

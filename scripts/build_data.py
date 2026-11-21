@@ -9,6 +9,7 @@ Chinese name, plus Racecourse which is absent from the lines file.
 from __future__ import annotations
 
 import csv
+import heapq
 import json
 import math
 import urllib.error
@@ -187,7 +188,8 @@ def build_network(rows: list[dict[str, str]], points: list[dict[str, object]]) -
     segments = curved_segments(route_ways)
     covered = {segment["line"] for segment in segments}
     segments.extend(straight_segments(rows, coords, LINE_CODES - covered))
-    return {"lines": LINES, "stations": stations, "segments": segments}
+    legs = build_legs(route_ways, stations, official_pairs(rows))
+    return {"lines": LINES, "stations": stations, "segments": segments, "legs": legs}
 
 
 def straight_segments(rows: list[dict[str, str]], coords: dict[str, dict[str, object]], lines: set[str]) -> list[dict[str, object]]:
@@ -323,6 +325,291 @@ def ways_from_overpass(payload: dict[str, object]) -> dict[str, dict[str, list[l
             coords = [[round(float(point["lon"]), 5), round(float(point["lat"]), 5)] for point in geometry]
             ways.setdefault(line, {})[str(member["ref"])] = coords
     return ways
+
+
+def official_pairs(rows: list[dict[str, str]]) -> list[tuple[str, str, str]]:
+    pair_seen: set[tuple[str, str, str]] = set()
+    pairs: list[tuple[str, str, str]] = []
+    grouped: dict[tuple[str, str], list[tuple[float, str]]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["Line Code"].strip(), row["Direction"].strip())].append(
+            (float(row["Sequence"]), row["Station Code"].strip())
+        )
+    for (line, _direction), entries in grouped.items():
+        ordered = [code for _seq, code in sorted(entries)]
+        for start, end in zip(ordered, ordered[1:]):
+            key = (line, *sorted((start, end)))
+            if key in pair_seen:
+                continue
+            pair_seen.add(key)
+            pairs.append((line, start, end))
+    for start, end in (("SHT", "RAC"), ("RAC", "UNI")):
+        key = ("EAL", *sorted((start, end)))
+        if key not in pair_seen:
+            pairs.append(("EAL", start, end))
+    return pairs
+
+
+def distance_m(start: list[float], end: list[float]) -> float:
+    lat = math.radians((start[1] + end[1]) / 2)
+    dx = math.radians(end[0] - start[0]) * math.cos(lat) * 6_371_000
+    dy = math.radians(end[1] - start[1]) * 6_371_000
+    return math.hypot(dx, dy)
+
+
+def path_length(path: list[list[float]]) -> float:
+    return sum(distance_m(path[index], path[index + 1]) for index in range(len(path) - 1))
+
+
+def build_legs(
+    route_ways: dict[str, dict[str, list[list[float]]]],
+    stations: list[dict[str, object]],
+    pairs: list[tuple[str, str, str]],
+) -> list[dict[str, object]]:
+    by_code = {str(station["code"]): station for station in stations}
+    legs: list[dict[str, object]] = []
+    for line in LINE_CODES:
+        ways = route_ways.get(line, {})
+        line_pairs = [(start, end) for pair_line, start, end in pairs if pair_line == line]
+        routed = route_line({way_id: coords for way_id, coords in ways.items()}, line_pairs, by_code)
+        for start, end, path in routed:
+            legs.append({"line": line, "from": start, "to": end, "path": path})
+    return legs
+
+
+def main_track(polylines: list[list[list[float]]], join_m: float = 45) -> list[list[list[float]]]:
+    """Keep the connected passenger track and drop short depot sidings."""
+    count = len(polylines)
+    parent = list(range(count))
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for index, coords in enumerate(polylines):
+        for endpoint in (coords[0], coords[-1]):
+            nearest: tuple[float, int] | None = None
+            for other_index, other in enumerate(polylines):
+                if index == other_index:
+                    continue
+                projected = project_path(other, endpoint)
+                if projected is not None and (nearest is None or projected[0] < nearest[0]):
+                    nearest = (projected[0], other_index)
+            if nearest is not None and nearest[0] <= join_m:
+                parent[find(index)] = find(nearest[1])
+    groups: dict[int, list[list[list[float]]]] = defaultdict(list)
+    for index, coords in enumerate(polylines):
+        groups[find(index)].append(coords)
+    largest = max(groups.values(), key=len)
+    if len(largest) < max(3, count // 2):
+        return polylines
+    return largest
+
+
+def route_line(
+    ways: dict[str, list[list[float]]],
+    pairs: list[tuple[str, str]],
+    stations: dict[str, dict[str, object]],
+) -> list[tuple[str, str, list[list[float]]]]:
+    straight_routes = [
+        (
+            start,
+            end,
+            [
+                [float(stations[start]["lng"]), float(stations[start]["lat"])],
+                [float(stations[end]["lng"]), float(stations[end]["lat"])],
+            ],
+        )
+        for start, end in pairs
+        if start in stations and end in stations
+    ]
+    if not ways:
+        return straight_routes
+
+    polylines = main_track(list(ways.values()))
+    needed = {code for pair in pairs for code in pair}
+    endpoint_count = len(polylines) * 2
+    parent = list(range(endpoint_count))
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    endpoints = [point for coords in polylines for point in (coords[0], coords[-1])]
+    for index, point in enumerate(endpoints):
+        for earlier in range(index):
+            if distance_m(point, endpoints[earlier]) <= 45:
+                parent[find(index)] = find(earlier)
+
+    splits: list[list[tuple[float, str, list[float]]]] = [[] for _ in polylines]
+    for index, coords in enumerate(polylines):
+        for which, endpoint in enumerate((coords[0], coords[-1])):
+            node = f"n{find(index * 2 + which)}"
+            for other_index, other in enumerate(polylines):
+                if index == other_index:
+                    continue
+                projected = project_path(other, endpoint)
+                if projected is None or projected[0] > 45:
+                    continue
+                _gap, along, point = projected
+                other_length = path_length(other)
+                if along <= 20 or along >= other_length - 20:
+                    continue
+                splits[other_index].append((along, node, point))
+
+    station_point: dict[str, list[float]] = {}
+    for code in needed:
+        point = [float(stations[code]["lng"]), float(stations[code]["lat"])]
+        station_point[code] = point
+        projections: list[tuple[float, int, float, list[float]]] = []
+        for other_index, other in enumerate(polylines):
+            projected = project_path(other, point)
+            if projected is not None:
+                projections.append((projected[0], other_index, projected[1], projected[2]))
+        if projections:
+            nearest = min(item[0] for item in projections)
+            # Both rails usually run within a few metres. Link the station to each
+            # of them so a train is not sent to the far end to change tracks.
+            for gap, other_index, along, snapped in projections:
+                if gap <= 450 and gap <= max(40, nearest + 25):
+                    splits[other_index].append((along, code, snapped))
+
+    edges: dict[str, list[tuple[str, list[list[float]]]]] = defaultdict(list)
+
+    def add_edge(start: str, end: str, path: list[list[float]]) -> None:
+        if start == end or len(path) < 2:
+            return
+        edges[start].append((end, path))
+        edges[end].append((start, list(reversed(path))))
+
+    for index, coords in enumerate(polylines):
+        total = path_length(coords)
+        cuts = [(0.0, f"n{find(index * 2)}", coords[0])]
+        for along, node, point in splits[index]:
+            cuts.append((max(0.0, min(total, along)), node, point))
+        cuts.append((total, f"n{find(index * 2 + 1)}", coords[-1]))
+        cuts.sort(key=lambda item: (item[0], item[1]))
+        for left, right in zip(cuts, cuts[1:]):
+            geometry = slice_path(coords, left[0], right[0], left[2], right[2])
+            if len(geometry) < 2:
+                geometry = [left[2], right[2]]
+            add_edge(left[1], right[1], geometry)
+
+    routed: list[tuple[str, str, list[list[float]]]] = []
+    for start, end in pairs:
+        path = shortest_path(edges, start, end)
+        straight = [station_point[start], station_point[end]]
+        limit = max(1_500, distance_m(straight[0], straight[1]) * 4)
+        if path is None or path_length(path) > limit:
+            path = straight
+        else:
+            path = anchor_path(path, station_point[start], station_point[end])
+            path = simplify_path(path, 8)
+        routed.append((start, end, [[round(coord[0], 5), round(coord[1], 5)] for coord in path]))
+    return routed
+
+
+def anchor_path(path: list[list[float]], start: list[float], end: list[float]) -> list[list[float]]:
+    anchored = list(path)
+    if distance_m(anchored[0], start) > 15:
+        anchored.insert(0, start)
+    else:
+        anchored[0] = start
+    if distance_m(anchored[-1], end) > 15:
+        anchored.append(end)
+    else:
+        anchored[-1] = end
+    return anchored
+
+
+def project_path(path: list[list[float]], point: list[float]) -> tuple[float, float, list[float]] | None:
+    best: tuple[float, float, list[float]] | None = None
+    walked = 0.0
+    for index in range(len(path) - 1):
+        start, end = path[index], path[index + 1]
+        length = distance_m(start, end)
+        if length == 0:
+            continue
+        lat = math.radians((start[1] + end[1]) / 2)
+        sx = 0.0
+        sy = 0.0
+        ex = math.radians(end[0] - start[0]) * math.cos(lat) * 6_371_000
+        ey = math.radians(end[1] - start[1]) * 6_371_000
+        px = math.radians(point[0] - start[0]) * math.cos(lat) * 6_371_000
+        py = math.radians(point[1] - start[1]) * 6_371_000
+        ratio = max(0.0, min(1.0, (px * ex + py * ey) / (ex * ex + ey * ey)))
+        projected = [start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio]
+        distance = distance_m(projected, point)
+        if best is None or distance < best[0]:
+            best = (distance, walked + length * ratio, projected)
+        walked += length
+    return best
+
+
+def slice_path(
+    path: list[list[float]],
+    start_distance: float,
+    end_distance: float,
+    start_point: list[float],
+    end_point: list[float],
+) -> list[list[float]]:
+    if end_distance < start_distance:
+        start_distance, end_distance = end_distance, start_distance
+        start_point, end_point = end_point, start_point
+    points = [start_point]
+    walked = 0.0
+    for index in range(len(path) - 1):
+        length = distance_m(path[index], path[index + 1])
+        next_walked = walked + length
+        if next_walked > start_distance + 1 and walked < end_distance - 1:
+            points.append(path[index + 1])
+        walked = next_walked
+    points.append(end_point)
+    compact = [points[0]]
+    for point in points[1:]:
+        if distance_m(compact[-1], point) >= 1:
+            compact.append(point)
+    return compact
+
+
+def shortest_path(
+    edges: dict[str, list[tuple[str, list[list[float]]]]],
+    start: str,
+    end: str,
+) -> list[list[float]] | None:
+    if start == end:
+        return None
+    costs: dict[str, float] = {start: 0.0}
+    previous: dict[str, tuple[str, list[list[float]]]] = {}
+    queue = [(0.0, start)]
+    while queue:
+        cost, node = heapq.heappop(queue)
+        if cost != costs.get(node):
+            continue
+        if node == end:
+            break
+        for neighbor, path in edges.get(node, []):
+            next_cost = cost + path_length(path)
+            if next_cost < costs.get(neighbor, float("inf")):
+                costs[neighbor] = next_cost
+                previous[neighbor] = (node, path)
+                heapq.heappush(queue, (next_cost, neighbor))
+    if end not in previous:
+        return None
+    pieces: list[list[list[float]]] = []
+    node = end
+    while node != start:
+        node, path = previous[node]
+        pieces.append(path)
+    pieces.reverse()
+    full = [pieces[0][0]]
+    for piece in pieces:
+        full.extend(piece[1:])
+    return full
 
 
 def curved_segments(route_ways: dict[str, dict[str, list[list[float]]]]) -> list[dict[str, object]]:

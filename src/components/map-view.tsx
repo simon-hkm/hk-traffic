@@ -1,10 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import type { DataDrivenPropertyValueSpecification, Map as MaplibreMap } from "maplibre-gl"
+import type { DataDrivenPropertyValueSpecification, GeoJSONSource, Map as MaplibreMap } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
+import { trainCoordinate } from "@/lib/moving-trains"
 import { cameras, lineByCode, network } from "@/lib/network"
-import type { LineCode, Selection } from "@/lib/types"
+import type { LineCode, MovingTrain, Selection } from "@/lib/types"
 
 export type MapFocus = {
   lng: number
@@ -16,6 +17,7 @@ type MapViewProps = {
   showMtr: boolean
   showCameras: boolean
   activeLine: LineCode | "all"
+  trains: MovingTrain[]
   selected: Selection | null
   focus: MapFocus | null
   onSelect: (selection: Selection | null) => void
@@ -104,6 +106,7 @@ function applyScene(
   map.setLayoutProperty("line-casing", "visibility", showMtr ? "visible" : "none")
   map.setLayoutProperty("mtr-lines", "visibility", showMtr ? "visible" : "none")
   map.setLayoutProperty("stations", "visibility", showMtr ? "visible" : "none")
+  map.setLayoutProperty("trains", "visibility", showMtr ? "visible" : "none")
   map.setLayoutProperty("cameras", "visibility", showCameras ? "visible" : "none")
 
   const lineOpacity: DataDrivenPropertyValueSpecification<number> =
@@ -137,10 +140,36 @@ function applyScene(
   previous.camera = cameraId
 }
 
+const emptyTrains = {
+  type: "FeatureCollection" as const,
+  features: [],
+}
+
+function trainCollection(trains: MovingTrain[] | undefined, now: number) {
+  return {
+    type: "FeatureCollection" as const,
+    features: (trains ?? []).flatMap((train) => {
+      const coordinates = trainCoordinate(train, now)
+      if (!coordinates) return []
+      return [
+        {
+          type: "Feature" as const,
+          properties: {
+            label: `往${train.destination}`,
+            color: lineByCode(train.line)?.color ?? "#17232b",
+          },
+          geometry: { type: "Point" as const, coordinates },
+        },
+      ]
+    }),
+  }
+}
+
 export function MapView({
   showMtr,
   showCameras,
   activeLine,
+  trains,
   selected,
   focus,
   onSelect,
@@ -151,7 +180,12 @@ export function MapView({
   const mapRef = useRef<MaplibreMap | null>(null)
   const previousRef = useRef({ station: null as string | null, camera: null as string | null })
   const handlers = useRef({ onSelect, onBasemapProblem, onBasemapReady, showMtr, showCameras })
+  const trainsRef = useRef(trains)
   const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    trainsRef.current = trains
+  }, [trains])
 
   useEffect(() => {
     handlers.current = { onSelect, onBasemapProblem, onBasemapReady, showMtr, showCameras }
@@ -194,6 +228,7 @@ export function MapView({
         map.addSource("mtr-lines", { type: "geojson", data: lineFeatures })
         map.addSource("stations", { type: "geojson", data: stationFeatures })
         map.addSource("cameras", { type: "geojson", data: cameraFeatures })
+        map.addSource("trains", { type: "geojson", data: emptyTrains })
         map.addLayer({
           id: "line-casing",
           type: "line",
@@ -269,6 +304,17 @@ export function MapView({
             ],
           },
         })
+        map.addLayer({
+          id: "trains",
+          type: "circle",
+          source: "trains",
+          paint: {
+            "circle-color": "#ffffff",
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 13, 8, 16, 11],
+            "circle-stroke-color": ["get", "color"],
+            "circle-stroke-width": 3,
+          },
+        })
 
         const bounds = new maplibregl.LngLatBounds()
         for (const station of network.stations) bounds.extend([station.lng, station.lat])
@@ -326,10 +372,15 @@ export function MapView({
         const current = mapRef.current
         if (!current) return
         const layers = queriedLayers(handlers.current.showMtr, handlers.current.showCameras)
-        const hit = layers.length
+        const stationHit = layers.length
           ? current.queryRenderedFeatures(event.point, { layers })[0]
           : undefined
-        current.getCanvas().style.cursor = hit ? "pointer" : ""
+        const trainHit =
+          handlers.current.showMtr && current.getLayer("trains")
+            ? current.queryRenderedFeatures(event.point, { layers: ["trains"] })[0]
+            : undefined
+        const hit = stationHit ?? trainHit
+        current.getCanvas().style.cursor = stationHit ? "pointer" : ""
         if (!hit) {
           popup.remove()
           return
@@ -357,6 +408,67 @@ export function MapView({
     if (!ready || !map) return
     applyScene(map, showMtr, showCameras, activeLine, selected, previousRef.current)
   }, [ready, showMtr, showCameras, activeLine, selected])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!ready || !map) return
+    const stations =
+      activeLine === "all" ? network.stations : network.stations.filter((station) => station.lines.includes(activeLine))
+    if (stations.length === 0) return
+    let west = Infinity
+    let south = Infinity
+    let east = -Infinity
+    let north = -Infinity
+    for (const station of stations) {
+      west = Math.min(west, station.lng)
+      south = Math.min(south, station.lat)
+      east = Math.max(east, station.lng)
+      north = Math.max(north, station.lat)
+    }
+    const narrow = window.matchMedia("(max-width: 767px)").matches
+    map.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      {
+        padding: {
+          top: 48,
+          right: 48,
+          bottom: narrow ? Math.round(window.innerHeight * 0.34) : 48,
+          left: 48,
+        },
+        maxZoom: activeLine === "all" ? 12 : 14,
+        duration: 700,
+      },
+    )
+    if (activeLine === "all") return
+    const nudgeCloser = () => {
+      if (map.getZoom() < 13.4) map.easeTo({ zoom: 13.4, duration: 450 })
+    }
+    map.once("idle", nudgeCloser)
+    return () => {
+      map.off("idle", nudgeCloser)
+    }
+  }, [ready, activeLine])
+
+  useEffect(() => {
+    if (!ready) return
+    let frame = 0
+    let last = 0
+    const tick = (now: number) => {
+      if (now - last > 100) {
+        last = now
+        const source = mapRef.current?.getSource("trains")
+        if (source?.type === "geojson") {
+          (source as GeoJSONSource).setData(trainCollection(trainsRef.current, Date.now()))
+        }
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [ready])
 
   useEffect(() => {
     const map = mapRef.current
