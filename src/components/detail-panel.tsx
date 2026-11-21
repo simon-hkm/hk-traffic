@@ -27,7 +27,7 @@ type DetailPanelProps = {
 function SourceNote() {
   return (
     <p className="text-xs leading-5 text-muted-foreground">
-      到站班次來自港鐵，約每十秒更新。快拍照片來自運輸署，約每兩分鐘更新。底圖為 OpenFreeMap，地圖資料來自 OpenStreetMap。
+      到站班次來自港鐵，由本站暫存，同一站約每 15 秒才向港鐵核對一次。快拍照片來自運輸署，同一地點約每 90 秒才取一次。底圖為 OpenFreeMap，由瀏覽器直接讀取，地圖資料來自 OpenStreetMap。
       車站位置是用公開地圖座標對上官方站名；九龍、大埔墟和馬場已另行核對。路綫沿 OpenStreetMap 的港鐵路軌彎曲。
       選定一條路綫後，列車會沿路軌移動，位置由到站時間推算，不是港鐵定位。
     </p>

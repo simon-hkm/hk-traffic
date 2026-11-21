@@ -14,9 +14,9 @@
 | --- | --- |
 | 底圖 | OpenFreeMap Liberty 樣式，經 MapLibre 顯示。免註冊、免鑰匙。 |
 | 路綫和站名 | [港鐵路綫及車站](https://opendata.mtr.com.hk/data/mtr_lines_and_stations.csv) |
-| 到站班次 | [港鐵實時列車服務資訊](https://data.gov.hk/tc-data/dataset/mtr-data2-nexttrain-data)。點選車站時查該站；選定一條路綫時，約每 20 秒查該綫各站，用來估算列車位置。 |
+| 到站班次 | [港鐵實時列車服務資訊](https://data.gov.hk/tc-data/dataset/mtr-data2-nexttrain-data)。瀏覽器只問本站；同一車站 15 秒內只向港鐵查一次。 |
 | 快拍位置 | [運輸署交通情況快拍圖像](https://data.gov.hk/tc-data/dataset/hk-td-tis_2-traffic-snapshot-images) |
-| 快拍照片 | 瀏覽器直接向 `tdcctv.data.one.gov.hk` 讀取 |
+| 快拍照片 | 瀏覽器只問本站；同一快拍點 90 秒內只向 `tdcctv.data.one.gov.hk` 取一次。 |
 
 官方路綫檔沒有車站座標，也沒有馬場站。座標來自 Wikidata，九龍站、大埔墟站和馬場站已另行核對。路綫形狀來自 OpenStreetMap 的港鐵路軌，沿真實走線彎曲。
 
@@ -43,32 +43,13 @@ npm run data
 
 Wikidata 若暫時拒絕連線，指令會改用 `scripts/fixtures/wikidata-stations.json`。
 
-檢查靜態輸出：
+建置並在本機以伺服器運行：
 
 ```bash
 npm run build
+npm start
 ```
 
-成品在 `out/`。
+到站和快拍由這個 Node 伺服器暫存，所以不能再把網站做成純靜態檔。`wrangler.jsonc` 裡的靜態發佈不含這兩個接口。
 
-## 驗收後才發佈到 Cloudflare
-
-正式版用 Cloudflare Workers 的免費方案，網址用平台提供的 `workers.dev`。網站是靜態檔案，到站和照片由瀏覽器直接向政府網址讀取，不經 Worker 轉發。靜態檔不計入每日 10 萬次請求額度。
-
-預計費用是 0 元。不買網域，不使用 Workers 付費方案，不自建地圖伺服器。
-
-要收費的做法沒有採用：
-
-- Workers 付費方案每月最少 5 美元。免費方案超出每日額度後會停止服務，不會自動扣費。
-- 自訂網域要另付網域費用。
-- 自建地圖圖磚要自己的伺服器。
-
-發佈前先在本機建好靜態檔，再登入你自己的 Cloudflare 帳戶：
-
-```bash
-npm run build
-npx wrangler login
-npx wrangler deploy
-```
-
-部署設定在 `wrangler.jsonc`。完成後，Wrangler 會印出 `https://hk-traffic-map.<你的帳戶>.workers.dev`。
+底圖圖磚仍由瀏覽器向 OpenFreeMap 讀取。圖磚有瀏覽器快取，不經本站轉送，避免把所有人的地圖流量集中到一個位址。

@@ -28,3 +28,7 @@ export function stationName(code: string): string {
 export function stationCodesOnLine(line: LineCode): string[] {
   return network.stations.filter((station) => station.lines.includes(line)).map((station) => station.code)
 }
+
+export function isLineCode(value: string): value is LineCode {
+  return lines.has(value as LineCode)
+}

@@ -18,9 +18,9 @@ function isGif(bytes: Uint8Array): boolean {
   return bytes.length >= 3 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46
 }
 
-export async function loadSnapshot(url: string): Promise<SnapshotView> {
+export async function loadSnapshot(key: string): Promise<SnapshotView> {
   try {
-    const response = await fetch(url, { cache: "no-store" })
+    const response = await fetch(`/api/snapshot/${encodeURIComponent(key)}`)
     if (response.status === 404) {
       return { state: "error", message: "這個快拍點暫時沒有照片。" }
     }
@@ -36,10 +36,6 @@ export async function loadSnapshot(url: string): Promise<SnapshotView> {
     if (gif) return { state: "unavailable", src, updatedAt }
     return { state: "photo", src, updatedAt }
   } catch {
-    return {
-      state: "remote",
-      src: url,
-      message: "未能先檢查照片內容，以下直接顯示運輸署圖片。",
-    }
+    return { state: "error", message: "暫時無法讀取照片，請稍後再試。" }
   }
 }

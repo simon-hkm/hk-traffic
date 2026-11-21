@@ -61,7 +61,7 @@ export function TrafficApp() {
     const code = station.code
     const token = reloadToken
     let cancelled = false
-    loadStationBoard(station.lines, code).then((lines) => {
+    loadStationBoard(code, station.lines).then((lines) => {
       if (!cancelled) setBoardCache({ code, token, lines })
     })
     return () => {
@@ -75,7 +75,7 @@ export function TrafficApp() {
     const token = reloadToken
     let cancelled = false
     let objectUrl: string | null = null
-    loadSnapshot(camera.url).then((view) => {
+    loadSnapshot(key).then((view) => {
       if (cancelled) {
         if (view.src?.startsWith("blob:")) URL.revokeObjectURL(view.src)
         return

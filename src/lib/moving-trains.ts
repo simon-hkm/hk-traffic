@@ -1,5 +1,5 @@
-import { network, stationCodesOnLine } from "@/lib/network"
-import { loadLine } from "@/lib/mtr"
+import { loadLineSchedules } from "@/lib/mtr"
+import { network } from "@/lib/network"
 import { hongKongInstant } from "@/lib/train-time"
 import type { LineCode, MovingTrain } from "@/lib/types"
 
@@ -33,19 +33,21 @@ type Candidate = {
 }
 
 export async function loadMovingTrains(line: LineCode): Promise<MotionResult> {
-  const codes = stationCodesOnLine(line)
+  const stations = await loadLineSchedules(line)
+  if (!stations) {
+    return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
+  }
+
   let rateLimited = false
   let failures = 0
-  const boards = await mapPool(codes, 4, async (code) => {
-    const board = await loadLine(line, code)
-    if (board.error?.includes("頻繁")) rateLimited = true
-    if (board.error) failures += 1
-    return { code, board }
-  })
-
   const arrivals: ArrivalSample[] = []
-  for (const { code, board } of boards) {
-    if (board.error) continue
+  const boards = Object.entries(stations)
+  for (const [code, board] of boards) {
+    if (board.error?.includes("頻繁")) rateLimited = true
+    if (board.error) {
+      failures += 1
+      continue
+    }
     for (const direction of board.directions) {
       for (const train of direction.trains) {
         const arrivalMs = hongKongInstant(train.time)
@@ -65,7 +67,7 @@ export async function loadMovingTrains(line: LineCode): Promise<MotionResult> {
   if (rateLimited && trains.length === 0) {
     return { trains, status: "limited", note: "查詢過於頻繁，列車位置稍後再更新。" }
   }
-  if (failures === codes.length) {
+  if (boards.length > 0 && failures === boards.length) {
     return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
   }
   if (trains.length === 0) {
@@ -286,19 +288,4 @@ function meters(start: [number, number], end: [number, number]): number {
   const dx = ((end[0] - start[0]) * Math.PI) / 180 * Math.cos(lat) * 6_371_000
   const dy = ((end[1] - start[1]) * Math.PI) / 180 * 6_371_000
   return Math.hypot(dx, dy)
-}
-
-async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let next = 0
-  async function worker() {
-    while (next < items.length) {
-      const index = next
-      next += 1
-      results[index] = await fn(items[index])
-    }
-  }
-  const workers = Math.min(limit, items.length)
-  await Promise.all(Array.from({ length: workers }, () => worker()))
-  return results
 }
