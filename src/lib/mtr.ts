@@ -1,3 +1,4 @@
+import { isLineCode } from "@/lib/network"
 import type { LineBoard, LineCode } from "@/lib/types"
 
 function failure(line: LineCode, message: string): LineBoard {
@@ -32,6 +33,27 @@ export async function loadStationBoard(stationCode: string, lines: LineCode[]): 
     return boards.length > 0 ? boards : offline("暫時無法取得到站資料，請稍後再試。")
   } catch {
     return offline("暫時無法取得到站資料，請稍後再試。")
+  }
+}
+
+export async function loadNetworkSchedules(): Promise<Partial<Record<LineCode, Record<string, LineBoard>>> | null> {
+  try {
+    const response = await fetch("/api/mtr/network")
+    if (!response.ok) return null
+    const payload = (await response.json()) as { lines?: unknown }
+    if (!payload.lines || typeof payload.lines !== "object") return null
+    const lines: Partial<Record<LineCode, Record<string, LineBoard>>> = {}
+    for (const [code, stations] of Object.entries(payload.lines)) {
+      if (!isLineCode(code) || !stations || typeof stations !== "object") continue
+      const boards: Record<string, LineBoard> = {}
+      for (const [station, board] of Object.entries(stations)) {
+        if (isBoard(board)) boards[station] = board
+      }
+      lines[code] = boards
+    }
+    return lines
+  } catch {
+    return null
   }
 }
 

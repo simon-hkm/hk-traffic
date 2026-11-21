@@ -1,6 +1,6 @@
 import "server-only"
 
-import { isLineCode, stationByCode, stationCodesOnLine, stationName } from "@/lib/network"
+import { isLineCode, network, stationByCode, stationCodesOnLine, stationName } from "@/lib/network"
 import { minutesUntil } from "@/lib/train-time"
 import type { LineBoard, LineCode, TrainRow } from "@/lib/types"
 
@@ -229,6 +229,22 @@ export async function getLineBoards(line: LineCode): Promise<{ stations: Record<
     if (result.cache !== "HIT") miss = true
   }
   return { stations, cache: miss ? "MISS" : "HIT" }
+}
+
+export async function getNetworkBoards(): Promise<{
+  lines: Record<LineCode, Record<string, LineBoard>>
+  cache: "HIT" | "MISS"
+}> {
+  const results = await Promise.all(
+    network.lines.map(async (line) => [line.code, await getLineBoards(line.code)] as const),
+  )
+  const lines = {} as Record<LineCode, Record<string, LineBoard>>
+  let miss = false
+  for (const [code, boards] of results) {
+    lines[code] = boards.stations
+    if (boards.cache !== "HIT") miss = true
+  }
+  return { lines, cache: miss ? "MISS" : "HIT" }
 }
 
 export async function getStationBoards(station: string): Promise<{ boards: LineBoard[]; cache: "HIT" | "MISS" } | null> {

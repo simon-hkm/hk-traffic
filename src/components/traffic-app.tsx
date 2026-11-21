@@ -6,7 +6,7 @@ import { MapView, type MapFocus } from "@/components/map-view"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cameraByKey, cameras, lineByCode, network, stationByCode } from "@/lib/network"
-import { loadMovingTrains } from "@/lib/moving-trains"
+import { loadMovingTrains, loadNetworkTrains } from "@/lib/moving-trains"
 import { loadStationBoard } from "@/lib/mtr"
 import { loadSnapshot } from "@/lib/snapshot"
 import type { Camera, LineBoard, LineCode, MovingTrain, Selection, SnapshotView, Station } from "@/lib/types"
@@ -31,7 +31,7 @@ export function TrafficApp() {
     { key: string; token: number; view: SnapshotView } | null
   >(null)
   const [motionCache, setMotionCache] = useState<{
-    line: LineCode
+    line: LineCode | "all"
     trains: MovingTrain[]
     note: string | null
   } | null>(null)
@@ -48,13 +48,12 @@ export function TrafficApp() {
     : snapshotCache?.key === camera.key && snapshotCache.token === reloadToken
       ? { status: "ready" as const, view: snapshotCache.view }
       : { status: "loading" as const }
-  const motions = showMtr && activeLine !== "all" && motionCache?.line === activeLine ? motionCache.trains : []
-  const motionNote =
-    activeLine === "all" || !showMtr
-      ? null
-      : motionCache?.line === activeLine
-        ? motionCache.note
-        : "正在估算這條綫的列車位置…"
+  const motions = showMtr && motionCache?.line === activeLine ? motionCache.trains : []
+  const motionNote = !showMtr
+    ? null
+    : motionCache?.line === activeLine
+      ? motionCache.note
+      : "正在估算列車位置…"
 
   useEffect(() => {
     if (!station) return
@@ -90,12 +89,13 @@ export function TrafficApp() {
   }, [camera, reloadToken])
 
   useEffect(() => {
-    if (activeLine === "all" || !showMtr) return
+    if (!showMtr) return
     const line = activeLine
     let cancelled = false
     let timer = 0
     const run = () => {
-      loadMovingTrains(line).then((result) => {
+      const load = line === "all" ? loadNetworkTrains() : loadMovingTrains(line)
+      load.then((result) => {
         if (cancelled) return
         setMotionCache((current) => {
           if (
@@ -157,7 +157,7 @@ export function TrafficApp() {
           <div className="min-w-0">
             <h1 className="truncate text-base font-semibold tracking-tight">香港交通實況</h1>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              點車站查到站班次。選定一條路綫，可看到列車沿路軌移動。
+              點車站查到站班次。白點是沿路軌移動的列車。
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -207,7 +207,7 @@ export function TrafficApp() {
             </Button>
           ))}
         </div>
-        {activeLine !== "all" && showMtr ? (
+        {showMtr ? (
           <p className="px-3 pb-2 text-xs text-muted-foreground md:px-4">
             {motionNote ?? "白點是列車，位置用到站時間估算，不是港鐵定位。"}
           </p>

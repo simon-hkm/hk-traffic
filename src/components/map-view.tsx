@@ -310,7 +310,7 @@ export function MapView({
           source: "trains",
           paint: {
             "circle-color": "#ffffff",
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 13, 8, 16, 11],
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 4.5, 12, 7, 16, 11],
             "circle-stroke-color": ["get", "color"],
             "circle-stroke-width": 3,
           },

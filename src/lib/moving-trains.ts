@@ -1,7 +1,7 @@
-import { loadLineSchedules } from "@/lib/mtr"
+import { loadLineSchedules, loadNetworkSchedules } from "@/lib/mtr"
 import { network } from "@/lib/network"
 import { hongKongInstant } from "@/lib/train-time"
-import type { LineCode, MovingTrain } from "@/lib/types"
+import type { LineBoard, LineCode, MovingTrain } from "@/lib/types"
 
 // About 29 km/h. This only decides whether the arrival time is short enough for the
 // train to already be on the leg. After that it covers the remaining distance in the remaining time.
@@ -34,44 +34,58 @@ type Candidate = {
 
 export async function loadMovingTrains(line: LineCode): Promise<MotionResult> {
   const stations = await loadLineSchedules(line)
-  if (!stations) {
-    return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
-  }
+  if (!stations) return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
+  return resultFromSchedules([{ line, stations }])
+}
 
+export async function loadNetworkTrains(): Promise<MotionResult> {
+  const lines = await loadNetworkSchedules()
+  if (!lines) return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
+  const groups = Object.entries(lines).flatMap(([line, stations]) =>
+    stations ? [{ line: line as LineCode, stations }] : [],
+  )
+  return resultFromSchedules(groups)
+}
+
+function resultFromSchedules(groups: { line: LineCode; stations: Record<string, LineBoard> }[]): MotionResult {
+  const now = Date.now()
   let rateLimited = false
   let failures = 0
-  const arrivals: ArrivalSample[] = []
-  const boards = Object.entries(stations)
-  for (const [code, board] of boards) {
-    if (board.error?.includes("頻繁")) rateLimited = true
-    if (board.error) {
-      failures += 1
-      continue
-    }
-    for (const direction of board.directions) {
-      for (const train of direction.trains) {
-        const arrivalMs = hongKongInstant(train.time)
-        if (!train.destCode || arrivalMs === null) continue
-        arrivals.push({
-          station: code,
-          destCode: train.destCode,
-          destination: train.destination,
-          seq: train.seq,
-          arrivalMs,
-        })
+  let boards = 0
+  const trains: MovingTrain[] = []
+  for (const group of groups) {
+    const arrivals: ArrivalSample[] = []
+    for (const [code, board] of Object.entries(group.stations)) {
+      boards += 1
+      if (board.error?.includes("頻繁")) rateLimited = true
+      if (board.error) {
+        failures += 1
+        continue
+      }
+      for (const direction of board.directions) {
+        for (const train of direction.trains) {
+          const arrivalMs = hongKongInstant(train.time)
+          if (!train.destCode || arrivalMs === null) continue
+          arrivals.push({
+            station: code,
+            destCode: train.destCode,
+            destination: train.destination,
+            seq: train.seq,
+            arrivalMs,
+          })
+        }
       }
     }
+    trains.push(...motionsFromArrivals(group.line, arrivals, now))
   }
-
-  const trains = motionsFromArrivals(line, arrivals, Date.now())
   if (rateLimited && trains.length === 0) {
     return { trains, status: "limited", note: "查詢過於頻繁，列車位置稍後再更新。" }
   }
-  if (boards.length > 0 && failures === boards.length) {
+  if (boards > 0 && failures === boards) {
     return { trains: [], status: "error", note: "暫時無法估算列車位置。" }
   }
   if (trains.length === 0) {
-    return { trains, status: "empty", note: "這條綫暫時沒有可顯示的班次。" }
+    return { trains, status: "empty", note: "暫時沒有可顯示的班次。" }
   }
   return {
     trains,
