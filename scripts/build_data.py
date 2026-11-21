@@ -207,8 +207,8 @@ def build_network(rows: list[dict[str, str]], points: list[dict[str, object]]) -
                 }
             )
 
-    # Racecourse sits on a spur between Fo Tan and University.
-    for start, end in (("FOT", "RAC"), ("RAC", "UNI")):
+    # Race-day trains run Sha Tin–Racecourse–University and skip Fo Tan.
+    for start, end in (("SHT", "RAC"), ("RAC", "UNI")):
         segments.append(
             {
                 "line": "EAL",
